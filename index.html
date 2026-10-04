@@ -257,9 +257,9 @@ let bgCache=null;
 addEventListener('resize',resize);
 
 // ===== 声音：WebAudio 合成，主音量→压缩器；iOS 解锁/中断恢复做得很保守 =====
-const AU={ctx:null,master:null,sfx:null,mus:null,noise:null,muted:!!load('muted',false),track:null,seq:null,broken:false,lastTry:0};
+const AU={ctx:null,master:null,sfx:null,mus:null,noise:null,muted:!!load('muted',false),track:null,seq:null,broken:false,lastTry:0,bg:false};
+const setSession=t=>{try{if(navigator.audioSession&&navigator.audioSession.type!==t)navigator.audioSession.type=t;}catch(e){}};
 function audioBuild(){
-  try{if(navigator.audioSession)navigator.audioSession.type='playback';}catch(e){}   // iOS 17+：静音键打开时也能出声
   const AC=window.AudioContext||window.webkitAudioContext;if(!AC)return false;
   try{AU.ctx=new AC({latencyHint:'interactive'});}catch(e){try{AU.ctx=new AC();}catch(e2){AU.ctx=null;return false;}}
   const c=AU.ctx;
@@ -268,9 +268,12 @@ function audioBuild(){
   AU.sfx=c.createGain();AU.sfx.gain.value=1;AU.sfx.connect(AU.master);
   AU.mus=c.createGain();AU.mus.gain.value=0.32;AU.mus.connect(AU.master);
   AU.noise=c.createBuffer(1,c.sampleRate,c.sampleRate);const d=AU.noise.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;
-  c.onstatechange=()=>{if(c.state==='running'){AU.broken=false;musicSync();}};
+  c.onstatechange=()=>{if(c.state!=='running')return;AU.broken=false;if(AU.bg||document.hidden){c.suspend().catch(()=>{});return;}musicSync();};
   return true;}
-function audioUnlock(){                       // 必须在用户手势(touchend/click/keydown)里调用
+function audioUnlock(){                       // 必须在用户手势(touchend/click/keydown)里调用；回到前台后也只在这里恢复声音
+  if(document.hidden)return;
+  setSession('playback');                      // iOS 17+：静音键打开时也能出声（只在前台、用户点按时设置）
+  if(AU.bg){AU.bg=false;if(AU.master){const t=AU.ctx.currentTime;AU.master.gain.cancelScheduledValues(t);AU.master.gain.setValueAtTime(AU.muted?0:0.9,t);}}
   if(AU.broken&&AU.ctx){try{AU.ctx.close();}catch(e){}AU.ctx=null;AU.seq&&AU.seq.stop();AU.seq=null;AU.track=null;}
   if(AU.ctx&&AU.ctx.state==='closed')AU.ctx=null;
   if(!AU.ctx&&!audioBuild())return;
@@ -281,14 +284,19 @@ function audioUnlock(){                       // 必须在用户手势(touchend/
     const t=performance.now();AU.lastTry=t;
     setTimeout(()=>{if(AU.ctx===c&&c.state!=='running'&&!document.hidden&&AU.lastTry===t)AU.broken=true;},600); // 卡住了：下次点击直接重建
   }else musicSync();}
-function audioWake(){if(AU.ctx&&AU.ctx.state!=='running'&&AU.ctx.state!=='closed'){const p=AU.ctx.resume();if(p&&p.catch)p.catch(()=>{});}}
-addEventListener('pageshow',()=>{audioWake();});
-document.addEventListener('visibilitychange',()=>{if(document.hidden){if(AU.seq){AU.seq.stop();AU.seq=null;AU.track=null;}if(AU.ctx&&AU.ctx.state==='running')AU.ctx.suspend().catch(()=>{});}
-  else{audioWake();setTimeout(musicSync,250);}});
+// 切到后台/锁屏/切换 App：立刻静音、停音乐、挂起 AudioContext、释放 iOS 音频会话；回来后等下一次点按再恢复
+function audioToBackground(){AU.bg=true;
+  if(AU.seq){AU.seq.stop();AU.seq=null;}AU.track=null;
+  if(AU.ctx&&AU.master){const t=AU.ctx.currentTime;AU.master.gain.cancelScheduledValues(t);AU.master.gain.value=0;AU.master.gain.setValueAtTime(0,t);}
+  if(AU.ctx&&AU.ctx.state!=='closed'&&AU.ctx.state!=='suspended'){const p=AU.ctx.suspend();if(p&&p.catch)p.catch(()=>{});}
+  setSession('auto');}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)audioToBackground();});
+addEventListener('pagehide',audioToBackground);
+addEventListener('blur',audioToBackground);
 function setMuted(v){AU.muted=v;save('muted',v);$('tMute').classList.toggle('muted',v);$('tMute').setAttribute('aria-label',v?'打开声音':'静音');
   if(AU.master){const t=AU.ctx.currentTime;AU.master.gain.cancelScheduledValues(t);AU.master.gain.setTargetAtTime(v?0:0.9,t,0.03);}
-  if(!v)audioUnlock();musicSync();}
-const ok=()=>AU.ctx&&AU.ctx.state==='running';
+  if(!v)audioUnlock();musicSync();}  // setMuted 只会在点按/按键里调用
+const ok=()=>AU.ctx&&AU.ctx.state==='running'&&!AU.bg&&!document.hidden;
 function env(g,t,a,peak,dur,curve){g.gain.setValueAtTime(0.0001,t);g.gain.exponentialRampToValueAtTime(peak,t+a);g.gain.exponentialRampToValueAtTime(0.0001,t+dur);}
 function tone(freq,dur,type,vol,delay,f2,dest){const c=AU.ctx,t=c.currentTime+(delay||0);const o=c.createOscillator(),g=c.createGain();
   o.type=type||'sine';o.frequency.setValueAtTime(freq,t);if(f2)o.frequency.exponentialRampToValueAtTime(f2,t+dur);
@@ -359,7 +367,7 @@ function makeMelodies(seed){let s=seed;const r=()=>(s=(s*16807)%2147483647)/2147
       let m=72+12*Math.floor(idx/5)+PENTA[idx%5];if(strong)m=ch[1+Math.floor(r()*2)]+24;arr.push(m);}
     out.push(arr);}return out;}
 const MEL_MATCH=makeMelodies(7),MEL_MENU=makeMelodies(31);
-function startSeq(kind){const c=AU.ctx,bpm=kind==='match'?118:92,step=60/bpm/2;let next=c.currentTime+0.08,i=0,stopped=false,timer=null;
+function startSeq(kind){const c=AU.ctx,bpm=kind==='match'?118:92,step=60/bpm/2;let next=c.currentTime+0.08,i=0,stopped=false,timer=null,self=null;
   const mel=kind==='match'?MEL_MATCH:MEL_MENU;
   function note(m,t,dur,type,vol,lpf){const o=c.createOscillator(),g=c.createGain(),f=c.createBiquadFilter();o.type=type;o.frequency.setValueAtTime(NOTE(m),t);
     f.type='lowpass';f.frequency.value=lpf;g.gain.setValueAtTime(0.0001,t);g.gain.exponentialRampToValueAtTime(vol,t+0.012);g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
@@ -369,6 +377,7 @@ function startSeq(kind){const c=AU.ctx,bpm=kind==='match'?118:92,step=60/bpm/2;l
   function kick(t){const o=c.createOscillator(),g=c.createGain();o.frequency.setValueAtTime(130,t);o.frequency.exponentialRampToValueAtTime(45,t+0.12);
     g.gain.setValueAtTime(0.55,t);g.gain.exponentialRampToValueAtTime(0.0001,t+0.16);o.connect(g).connect(AU.mus);o.start(t);o.stop(t+0.18);}
   function tick(){if(stopped)return;
+    if(document.hidden||AU.bg||c.state!=='running'){stopped=true;if(AU.seq===self){AU.seq=null;AU.track=null;}return;}   // 后台绝不排音符
     if(next<c.currentTime-0.2)next=c.currentTime+0.05;            // 后台回来不补播一大串
     while(next<c.currentTime+0.12){const bar=Math.floor(i/8)%4,ch=CHORDS[bar],s=i%8,ph=Math.floor(i/32)%4;
       const hot=kind==='match'&&intensity>0;
@@ -380,10 +389,10 @@ function startSeq(kind){const c=AU.ctx,bpm=kind==='match'?118:92,step=60/bpm/2;l
       const m=mel[ph][i%32];if(m&&(kind==='match'||s%2===0))note(m,next,step*(kind==='match'?1.1:1.8),kind==='match'?'square':'triangle',kind==='match'?0.06:0.09,kind==='match'?2400:3000);
       i++;next+=step;}
     timer=setTimeout(tick,25);}
-  tick();return {stop(){stopped=true;clearTimeout(timer);}};}
+  self={stop(){stopped=true;clearTimeout(timer);}};tick();return self;}
 let intensity=0;
 function musicWant(){if(!settings.music||AU.muted)return null;if(state==='over')return overT>2.8?'menu':null;return demo?'menu':'match';}
-function musicSync(){if(!AU.ctx)return;const want=ok()?musicWant():null;if(want===AU.track)return;
+function musicSync(){if(!AU.ctx)return;const want=ok()?musicWant():null;if(want===AU.track&&(!want||AU.seq))return;
   if(AU.seq){AU.seq.stop();AU.seq=null;}AU.track=want;if(want)AU.seq=startSeq(want);}
 
 // ===== 状态 =====
@@ -502,7 +511,8 @@ addEventListener('keydown',e=>{
   if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space','Enter'].includes(e.code))e.preventDefault();
   audioUnlock();keys[e.code]=true;if(e.repeat)return;onPress(e.code);});
 addEventListener('keyup',e=>{keys[e.code]=false;});
-addEventListener('blur',()=>{for(const k in keys)keys[k]=false;if(!demo&&state!=='over'&&!paused)setPause(true);});
+function pauseForBackground(){for(const k in keys)keys[k]=false;if(!demo&&state!=='over'&&!paused)setPause(true);}
+addEventListener('blur',pauseForBackground);addEventListener('pagehide',pauseForBackground);
 function onPress(code){
   if(code==='KeyM'){setMuted(!AU.muted);return;}
   if(demo){if(screenId==='help'){if(code==='Escape'||code==='Enter'||code==='Space')showScreen('menu');return;}
@@ -964,7 +974,7 @@ document.addEventListener('click',()=>audioUnlock(),true);
 document.addEventListener('pointerdown',()=>audioUnlock(),true);
 $('tPause').onclick=e=>{e.currentTarget.blur();setPause(!paused);};
 $('tMute').onclick=e=>{e.currentTarget.blur();setMuted(!AU.muted);};
-document.addEventListener('visibilitychange',()=>{if(document.hidden&&!demo&&state!=='over'&&!paused)setPause(true);});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)pauseForBackground();});
 function updateTouchUI(){const on=touchMode&&!demo&&state!=='over'&&!paused;
   const cls=(on?'on ':'')+(settings.mode==='ai'?'m1':'m2');if(cls!==touchCls){touchCls=cls;touchLayer.className=cls;if(!on){tDown.clear();tbs.forEach(b=>{b.classList.remove('down');keys[b.dataset.k]=false;});}}}
 function checkPortrait(){if(touchMode&&innerHeight>innerWidth&&!demo&&state!=='over'&&!paused)setPause(true);}
