@@ -495,8 +495,11 @@ function addText(text,x,y,color,size,dur){texts.push({text,x,y,color:color||'#ff
 const MAP0={l:['KeyA'],r:['KeyD'],j:['KeyW'],s:['KeyS','Space']};
 const MAP1={l:['ArrowLeft'],r:['ArrowRight'],j:['ArrowUp'],s:['ArrowDown','Enter','NumpadEnter']};
 const anyKey=list=>list.some(k=>keys[k]);
+let starts=0;
 addEventListener('keydown',e=>{
-  if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space','Enter'].includes(e.code)&&!(demo&&e.target&&e.target.tagName==='BUTTON'&&e.code!=='Space'))e.preventDefault();
+  // 菜单按钮获得焦点时，回车/空格交给按钮自己（避免重复触发）
+  if((e.code==='Enter'||e.code==='Space'||e.code==='NumpadEnter')&&e.target&&e.target.closest&&e.target.closest('.screen.show button')){audioUnlock();return;}
+  if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space','Enter'].includes(e.code))e.preventDefault();
   audioUnlock();keys[e.code]=true;if(e.repeat)return;onPress(e.code);});
 addEventListener('keyup',e=>{keys[e.code]=false;});
 addEventListener('blur',()=>{for(const k in keys)keys[k]=false;if(!demo&&state!=='over'&&!paused)setPause(true);});
@@ -538,7 +541,7 @@ function setPause(v){if(demo||state==='over')return;paused=v;showScreen(v?'pause
   if(AU.mus&&ok()){const t=AU.ctx.currentTime;AU.mus.gain.cancelScheduledValues(t);AU.mus.gain.setTargetAtTime(v?0.08:0.32,t,0.1);}}
 
 // ===== 流程 =====
-function startMatch(){demo=false;paused=false;players[0].ai=false;players[1].ai=settings.mode==='ai';
+function startMatch(){starts++;demo=false;paused=false;players[0].ai=false;players[1].ai=settings.mode==='ai';
   players[0].speedMul=1;players[1].speedMul=players[1].ai?DIFF[settings.diff].speed:1;
   score=[0,0];server=0;winner=-1;matchT=0;particles.length=0;texts.length=0;banner=null;special=null;hype=0;
   stats={longest:0,hits:[0,0],smashes:[0,0],specials:[0,0]};
@@ -933,7 +936,7 @@ window.render_game_to_text=()=>JSON.stringify({coords:'原点左上，x 向右�
   players:players.map(p=>({name:p.name,ai:p.ai,x:Math.round(p.x),y:Math.round(p.y),onGround:p.onGround,swinging:p.swingT>=0})),
   fx:{trauma:+trauma.toFixed(2),hitStop:+Math.max(0,hitStop).toFixed(3),particles:particles.length,banner:banner&&banner.text,special:special&&special.kind},
   audio:{state:AU.ctx?AU.ctx.state:'none',muted:AU.muted,track:AU.track},settings});
-window.__game={set forcePlane(v){forcePlane=v},get forcePlane(){return forcePlane},get planeCount(){return planeCount},get groundShots(){return groundShots},stepSh,specialRect,set forceSpecial(v){forceSpecial=v},get forceSpecial(){return forceSpecial},get specialCount(){return specialCount},get special(){return special},shoot,get paused(){return paused},get touchMode(){return touchMode},get muted(){return AU.muted},keys,get state(){return state},get score(){return score},set score(v){score=v},sh,players,settings,startMatch,toMenu,AU,get stats(){return stats}};
+window.__game={set forcePlane(v){forcePlane=v},get forcePlane(){return forcePlane},get planeCount(){return planeCount},get groundShots(){return groundShots},stepSh,specialRect,set forceSpecial(v){forceSpecial=v},get forceSpecial(){return forceSpecial},get specialCount(){return specialCount},get special(){return special},shoot,get paused(){return paused},get touchMode(){return touchMode},get muted(){return AU.muted},keys,get state(){return state},get score(){return score},set score(v){score=v},sh,players,settings,startMatch,toMenu,AU,get stats(){return stats},get starts(){return starts}};
 
 // ===== 触屏 =====
 var touchMode=('ontouchstart' in window)||navigator.maxTouchPoints>0||matchMedia('(pointer:coarse)').matches;
@@ -959,8 +962,8 @@ function onTouch(e){if(!touchMode){touchMode=true;document.body.classList.add('t
 ['gesturestart','gesturechange','gestureend','dblclick','contextmenu','selectstart'].forEach(n=>document.addEventListener(n,e=>e.preventDefault(),{passive:false}));
 document.addEventListener('click',()=>audioUnlock(),true);
 document.addEventListener('pointerdown',()=>audioUnlock(),true);
-$('tPause').onclick=()=>setPause(!paused);
-$('tMute').onclick=()=>setMuted(!AU.muted);
+$('tPause').onclick=e=>{e.currentTarget.blur();setPause(!paused);};
+$('tMute').onclick=e=>{e.currentTarget.blur();setMuted(!AU.muted);};
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&!demo&&state!=='over'&&!paused)setPause(true);});
 function updateTouchUI(){const on=touchMode&&!demo&&state!=='over'&&!paused;
   const cls=(on?'on ':'')+(settings.mode==='ai'?'m1':'m2');if(cls!==touchCls){touchCls=cls;touchLayer.className=cls;if(!on){tDown.clear();tbs.forEach(b=>{b.classList.remove('down');keys[b.dataset.k]=false;});}}}
